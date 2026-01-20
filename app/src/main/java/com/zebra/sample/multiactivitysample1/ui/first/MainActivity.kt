@@ -44,6 +44,9 @@ import kotlinx.coroutines.withContext
 import kotlin.concurrent.Volatile
 
 // Main activity that handles UI initialization, observes ViewModel state, and interacts with DataWedge.
+/* MainActivity: Handles RFID hardware lifecycle, DataWedge integration, and UI orchestration.
+ * Implements RFIDReaderEventHandler for connection events and RfidEventsListener for tag data.
+ */
 class MainActivity : AppCompatActivity(), Readers.RFIDReaderEventHandler, RfidEventsListener {
 
     // Binding for accessing views in the activity layout.
@@ -59,8 +62,12 @@ class MainActivity : AppCompatActivity(), Readers.RFIDReaderEventHandler, RfidEv
     // Adapter for managing RecyclerView items.
     private val itemAdapter = ItemAdapter()
 
-    /* RFID reader */
+    /**
+     * Initializes the RFID initialization process.
+     */
     private lateinit var readers: Readers
+
+
     private lateinit var availableRFIDReaderList: ArrayList<ReaderDevice>
     private lateinit var readerDevice: ReaderDevice
     private lateinit var reader: RFIDReader
@@ -237,6 +244,9 @@ class MainActivity : AppCompatActivity(), Readers.RFIDReaderEventHandler, RfidEv
         }
     }
 
+    /**
+     * Handles the initial connection to the RFID reader on a background IO thread.
+     */
     @SuppressLint("SetTextI18n")
     private fun InitReaderConnection() {
         lifecycleScope.launch {
@@ -249,17 +259,16 @@ class MainActivity : AppCompatActivity(), Readers.RFIDReaderEventHandler, RfidEv
                             readerDevice = availableRFIDReaderList[0]
 
                             Readers.attach(this@MainActivity)
-                            reader = readerDevice?.rfidReader!!
+                            reader = readerDevice.rfidReader!!
 
-                            if (reader?.isConnected == false) {
+                            if (reader.isConnected == false) {
 
                                 runOnUiThread {
-                                    lblRfidData!!?.setText("Connecnting...")
+                                    lblRfidData!!.setText("Connecnting...")
                                 }
-                                reader?.connect()
-                                runOnUiThread {
-                                    lblRfidData!!?.setText("Connnected to " + reader.hostName)
-                                }
+                                reader.connect()
+                                runOnUiThread { lblRfidData!!?.setText("Connnected to " + reader.hostName) }
+                                uiHandler.perform(MainUIHandler.UIAction.StatusUpdate("Connected to " + reader.hostName))
                                 ConfigureReader()
                                 return@withContext true
                             }
@@ -310,6 +319,9 @@ class MainActivity : AppCompatActivity(), Readers.RFIDReaderEventHandler, RfidEv
         }
     }
 
+    /**
+     * Sets up the RFID UI Handler with required dependencies.
+     */
     private fun setupUI() {
         uiHandler = MainUIHandler(
             lifecycleOwner = this,
@@ -326,6 +338,11 @@ class MainActivity : AppCompatActivity(), Readers.RFIDReaderEventHandler, RfidEv
      * 1. Removing UI Throttling Issues: Moving the heavy list updates out of MainActivity and into MainUIHandler.
      * 2. Refactoring for Clean Architecture: Correctly injecting ItemAdapter and Binding into the handler so MainActivity stays lean.
      * 3. Concurrency Safety: Improving how tagDB is accessed between the background thread (RFID reading) and the UI thread (rendering).
+     */
+    /**
+     * Starts a background Coroutine that takes periodic snapshots of the tag database
+     * and sends them to the UI handler. This prevents the UI from freezing during
+     * high-speed tag reading (Throttling).
      */
     private fun startUITimer() {
         if (uiUpdateJob?.isActive == true) return
@@ -345,15 +362,20 @@ class MainActivity : AppCompatActivity(), Readers.RFIDReaderEventHandler, RfidEv
         }
     }
 
+    /**
+     * Stops the background UI update job.
+     */
     private fun stopUITimer() {
         uiUpdateJob?.cancel()
         uiUpdateJob = null
     }
 
+    /**
+     * Configures hardware inventory settings and starts the read process and UI update
+     */
     private fun startInventory() {
         try {
             tagDB.clear()
-            uiHandler.perform(MainUIHandler.UIAction.ClearTags)
             startUITimer()
             reader.Actions?.Inventory?.perform()
         } catch (e: Exception) {
@@ -361,6 +383,9 @@ class MainActivity : AppCompatActivity(), Readers.RFIDReaderEventHandler, RfidEv
         }
     }
 
+    /**
+     * Stops the hardware read process and cancels the UI timer.
+     */
     private fun stopInventory() {
         try {
             if (reader.isConnected) {
@@ -376,6 +401,9 @@ class MainActivity : AppCompatActivity(), Readers.RFIDReaderEventHandler, RfidEv
         }
     }
 
+    /**
+     * Releases hardware resources to prevent memory leaks or battery drain.
+     */
     private fun disconnect() {
         try {
             reader.let {
@@ -402,6 +430,10 @@ class MainActivity : AppCompatActivity(), Readers.RFIDReaderEventHandler, RfidEv
         Log.d(TAG, "ECRT: -RFIDReaderDisappeared")
     }
 
+    /**
+     * RFID Callback: Triggered when the hardware reads tag data.
+     * Performance: Processes tags in batches and uses synchronization for thread safety.
+     */
     override fun eventReadNotify(rfidReadEvents: RfidReadEvents?) {
         val scannedTags: Array<TagData>? = reader.Actions?.getReadTags(100)
         scannedTags?.forEach { tag ->
@@ -426,6 +458,9 @@ class MainActivity : AppCompatActivity(), Readers.RFIDReaderEventHandler, RfidEv
         }
     }
 
+    /**
+     * RFID Callback: Triggered for status changes (Trigger pull, connection loss, etc.).
+     */
     override fun eventStatusNotify(rfidStatusEvents: RfidStatusEvents?) {
         val eventData = rfidStatusEvents?.StatusEventData
         when (eventData?.statusEventType) {
