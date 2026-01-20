@@ -43,13 +43,27 @@ class MainUIHandler(
                     statusTextView?.text = "RFID Engine Read Total = ${action.count}"
                 }
                 is UIAction.RefreshTagList -> {
-                    // Efficiently update the list from the snapshot
-                    action.tagMap.forEach { (epc, count) ->
-                        val rfidData = DWOutputData(epc, "Count: $count")
-                        itemAdapter.addItem(rfidData)
+//                    // Efficiently update the list from the snapshot
+//                    action.tagMap.forEach { (epc, count) ->
+//                        val rfidData = DWOutputData(epc, "Count: $count")
+//                        itemAdapter.addItem(rfidData)
+//                    }
+//                    if (action.tagMap.isNotEmpty()) {
+//                        binding.rvActivity1.smoothScrollToPosition(0)
+//                    }
+
+                    // Map the DB to the UI Model
+                    val dataList = action.tagMap.map { (epc, count) ->
+                        DWOutputData(epc, "Count: $count")
                     }
-                    if (action.tagMap.isNotEmpty()) {
-                        binding.rvActivity1.smoothScrollToPosition(0)
+
+                    // Optimization: Update adapter in bulk
+                    // Note: Ensure your ItemAdapter.addItem is efficient
+                    // or implement itemAdapter.submitList(dataList)
+                    dataList.forEach { itemAdapter.addItem(it) }
+
+                    if (dataList.isNotEmpty()) {
+                        binding.rvActivity1.scrollToPosition(0)
                     }
                 }
             }
