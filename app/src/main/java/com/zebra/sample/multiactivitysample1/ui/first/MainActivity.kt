@@ -1,6 +1,7 @@
 package com.zebra.sample.multiactivitysample1.ui.first
 
 import android.Manifest
+import android.annotation.SuppressLint
 import android.content.Intent
 import android.content.pm.ActivityInfo
 import android.content.pm.PackageManager
@@ -8,8 +9,6 @@ import android.os.Build
 import android.os.Bundle
 import android.util.Log
 import android.view.View
-import android.widget.ArrayAdapter
-import android.widget.ListView
 import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.enableEdgeToEdge
@@ -32,7 +31,6 @@ import com.zebra.rfid.api3.RfidStatusEvents
 import com.zebra.rfid.api3.STATUS_EVENT_TYPE
 import com.zebra.rfid.api3.TagData
 import com.zebra.sample.multiactivitysample1.R
-import com.zebra.sample.multiactivitysample1.data.models.DWOutputData
 import com.zebra.sample.multiactivitysample1.databinding.ActivityMainBinding
 import com.zebra.sample.multiactivitysample1.scanner.DWCommunicationWrapper
 import com.zebra.sample.multiactivitysample1.ui.adapter.ItemAdapter
@@ -75,6 +73,7 @@ class MainActivity : AppCompatActivity(), Readers.RFIDReaderEventHandler, RfidEv
     private val uiRefreshInterval = 500L
     private lateinit var uiHandler: MainUIHandler
 
+    @SuppressLint("SourceLockedOrientationActivity")
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         // 1. Set Portrait Mode
@@ -197,7 +196,7 @@ class MainActivity : AppCompatActivity(), Readers.RFIDReaderEventHandler, RfidEv
         // Unregister broadcast receivers and notifications.
         DWCommunicationWrapper.unregisterReceivers()
         viewModel.unregisterNotifications()
-        disconnect();
+        disconnect()
     }
 
     override fun onResume() {
@@ -238,6 +237,7 @@ class MainActivity : AppCompatActivity(), Readers.RFIDReaderEventHandler, RfidEv
         }
     }
 
+    @SuppressLint("SetTextI18n")
     private fun InitReaderConnection() {
         lifecycleScope.launch {
             val isConnected = withContext(Dispatchers.IO) {
@@ -249,7 +249,7 @@ class MainActivity : AppCompatActivity(), Readers.RFIDReaderEventHandler, RfidEv
                             readerDevice = availableRFIDReaderList[0]
 
                             Readers.attach(this@MainActivity)
-                            reader = readerDevice?.rfidReader!!!!
+                            reader = readerDevice?.rfidReader!!
 
                             if (reader?.isConnected == false) {
 
@@ -258,7 +258,7 @@ class MainActivity : AppCompatActivity(), Readers.RFIDReaderEventHandler, RfidEv
                                 }
                                 reader?.connect()
                                 runOnUiThread {
-                                    lblRfidData!!?.setText("Connnected to " + reader?.hostName)
+                                    lblRfidData!!?.setText("Connnected to " + reader.hostName)
                                 }
                                 ConfigureReader()
                                 return@withContext true
@@ -272,7 +272,7 @@ class MainActivity : AppCompatActivity(), Readers.RFIDReaderEventHandler, RfidEv
             }
 
             if (isConnected) {
-                Log.d(TAG, "#6 Connected OK, Reader=${reader?.hostName}")
+                Log.d(TAG, "#6 Connected OK, Reader=${reader.hostName}")
                 testRead()
             }
         }
@@ -280,7 +280,7 @@ class MainActivity : AppCompatActivity(), Readers.RFIDReaderEventHandler, RfidEv
 
     private fun testRead() {
         lifecycleScope.launch {
-            if (reader?.isConnected == true) {
+            if (reader.isConnected == true) {
                 Log.d(TAG, "Reader connected, starting inventory test...")
                 startInventory()
                 delay(2000) // Non-blocking delay (optimized)
@@ -290,7 +290,7 @@ class MainActivity : AppCompatActivity(), Readers.RFIDReaderEventHandler, RfidEv
     }
 
     private fun ConfigureReader() {
-        reader?.let { r ->
+        reader.let { r ->
             try {
                 if (r.isConnected) {
                     r.Events.apply {
@@ -355,7 +355,7 @@ class MainActivity : AppCompatActivity(), Readers.RFIDReaderEventHandler, RfidEv
             tagDB.clear()
             uiHandler.perform(MainUIHandler.UIAction.ClearTags)
             startUITimer()
-            reader?.Actions?.Inventory?.perform()
+            reader.Actions?.Inventory?.perform()
         } catch (e: Exception) {
             Log.e(TAG, "Start Inventory Failed", e)
         }
@@ -378,7 +378,7 @@ class MainActivity : AppCompatActivity(), Readers.RFIDReaderEventHandler, RfidEv
 
     private fun disconnect() {
         try {
-            reader?.let {
+            reader.let {
                 if (it.isConnected) {
                     it.Events.removeEventsListener(this)
                     it.disconnect()
@@ -403,7 +403,7 @@ class MainActivity : AppCompatActivity(), Readers.RFIDReaderEventHandler, RfidEv
     }
 
     override fun eventReadNotify(rfidReadEvents: RfidReadEvents?) {
-        val scannedTags: Array<TagData>? = reader?.Actions?.getReadTags(100)
+        val scannedTags: Array<TagData>? = reader.Actions?.getReadTags(100)
         scannedTags?.forEach { tag ->
             tag.tagID?.let { epc ->
                 val iSeenCount = tag.tagSeenCount
@@ -418,7 +418,7 @@ class MainActivity : AppCompatActivity(), Readers.RFIDReaderEventHandler, RfidEv
                         tagDB .put(epc, iSeenCount)
                     }
                     else{
-                        var iUpdatedCount = iSeenCount + tagDB .get(epc)!!
+                        val iUpdatedCount = iSeenCount + tagDB .get(epc)!!
                         tagDB .put(epc, iUpdatedCount)
                     }
                 }
@@ -430,13 +430,13 @@ class MainActivity : AppCompatActivity(), Readers.RFIDReaderEventHandler, RfidEv
         val eventData = rfidStatusEvents?.StatusEventData
         when (eventData?.statusEventType) {
             STATUS_EVENT_TYPE.HANDHELD_TRIGGER_EVENT -> {
-                if (rfidStatusEvents!!.StatusEventData.HandheldTriggerEventData.handheldEvent === HANDHELD_TRIGGER_EVENT_TYPE.HANDHELD_TRIGGER_PRESSED) {
+                if (rfidStatusEvents.StatusEventData.HandheldTriggerEventData.handheldEvent === HANDHELD_TRIGGER_EVENT_TYPE.HANDHELD_TRIGGER_PRESSED) {
                     //Fixed the UI Throttling and hardware debounce problems
                     if (bIsReading) return
                     Log.d(TAG, "ECRT: HANDHELD_TRIGGER_PRESSED")
                     startInventory()
                 }
-                else if (rfidStatusEvents!!.StatusEventData.HandheldTriggerEventData.handheldEvent === HANDHELD_TRIGGER_EVENT_TYPE.HANDHELD_TRIGGER_RELEASED) {
+                else if (rfidStatusEvents.StatusEventData.HandheldTriggerEventData.handheldEvent === HANDHELD_TRIGGER_EVENT_TYPE.HANDHELD_TRIGGER_RELEASED) {
                     Log.d(TAG, "ECRT: HANDHELD_TRIGGER_RELEASED")
                     stopInventory()
                 }
@@ -465,7 +465,6 @@ class MainActivity : AppCompatActivity(), Readers.RFIDReaderEventHandler, RfidEv
 
     companion object {
         private const val TAG = "RFID"
-        private const val RFID_VID = 1504
     }
 
 }

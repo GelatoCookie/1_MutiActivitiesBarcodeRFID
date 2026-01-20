@@ -1,6 +1,6 @@
 package com.zebra.sample.multiactivitysample1.ui.first
 
-import android.util.Log
+import android.annotation.SuppressLint
 import android.widget.TextView
 import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.lifecycleScope
@@ -28,6 +28,7 @@ class MainUIHandler(
         data class TotalCount(val count: Int) : UIAction()
     }
 
+    @SuppressLint("SetTextI18n")
     fun perform(action: UIAction) {
         // Ensure all UI operations happen on the Main thread
         lifecycleOwner.lifecycleScope.launch(Dispatchers.Main) {
