@@ -8,6 +8,8 @@ import android.os.Build
 import android.os.Bundle
 import android.util.Log
 import android.view.View
+import android.widget.ArrayAdapter
+import android.widget.ListView
 import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.enableEdgeToEdge
@@ -36,9 +38,12 @@ import com.zebra.sample.multiactivitysample1.scanner.DWCommunicationWrapper
 import com.zebra.sample.multiactivitysample1.ui.adapter.ItemAdapter
 import com.zebra.sample.multiactivitysample1.ui.second.SecondActivity
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlin.concurrent.Volatile
 
 // Main activity that handles UI initialization, observes ViewModel state, and interacts with DataWedge.
 class MainActivity : AppCompatActivity(), Readers.RFIDReaderEventHandler, RfidEventsListener {
@@ -62,8 +67,14 @@ class MainActivity : AppCompatActivity(), Readers.RFIDReaderEventHandler, RfidEv
     private lateinit var readerDevice: ReaderDevice
     private lateinit var reader: RFIDReader
     private var lblRfidData: TextView? = null
-
+    @Volatile
+    private var bIsReading: Boolean = false
     private var tagDB: HashMap<String, Int> = HashMap()
+    // Fixed UI Throttling Problem
+    private var uiUpdateJob: Job? = null
+    private val uiRefreshInterval = 500L
+
+    private lateinit var uiHandler: MainUIHandler
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -90,6 +101,7 @@ class MainActivity : AppCompatActivity(), Readers.RFIDReaderEventHandler, RfidEv
         Log.d(TAG, "#0 Checking Permission")
         checkAndInitRFID()
         tagDB.clear()
+        bIsReading = false
     }
 
     // Sets up LiveData observers to update the UI based on ViewModel changes.
@@ -219,6 +231,7 @@ class MainActivity : AppCompatActivity(), Readers.RFIDReaderEventHandler, RfidEv
     private fun initRFID() {
         try {
             readers = Readers(this, ENUM_TRANSPORT.ALL)
+            setupUI()
             InitReaderConnection()
         } catch (e: Exception) {
             Log.e(TAG, "Failed to initialize Readers SDK", e)
@@ -297,9 +310,51 @@ class MainActivity : AppCompatActivity(), Readers.RFIDReaderEventHandler, RfidEv
         }
     }
 
+    private fun setupUI() {
+        uiHandler = MainUIHandler(
+            lifecycleOwner = this,
+            statusTextView = lblRfidData,
+            itemAdapter = itemAdapter,
+            binding = binding
+        )
+    }
+
+    /**
+     * Start a background timer that refreshes the UI list at a set interval.
+     * This prevents the UI from locking up during fast reads (10,000+ tags/second).
+     * To optimize your code, we will focus on three main areas:
+     * 1. Removing UI Throttling Issues: Moving the heavy list updates out of MainActivity and into MainUIHandler.
+     * 2. Refactoring for Clean Architecture: Correctly injecting ItemAdapter and Binding into the handler so MainActivity stays lean.
+     * 3. Concurrency Safety: Improving how tagDB is accessed between the background thread (RFID reading) and the UI thread (rendering).
+     */
+    private fun startUITimer() {
+        if (uiUpdateJob?.isActive == true) return
+
+        uiUpdateJob = lifecycleScope.launch(Dispatchers.Default) {
+            while (isActive) {
+                // Thread-safe snapshot of the data
+                val snapshot = synchronized(tagDB) { HashMap(tagDB) }
+
+                if (snapshot.isNotEmpty()) {
+                    // Delegate UI updates to handler; no runOnUiThread needed here
+                    uiHandler.perform(MainUIHandler.UIAction.RefreshTagList(snapshot))
+                    uiHandler.perform(MainUIHandler.UIAction.StatusUpdate("Unique Tag Count = ${snapshot.size}"))
+                }
+                delay(uiRefreshInterval)
+            }
+        }
+    }
+
+    private fun stopUITimer() {
+        uiUpdateJob?.cancel()
+        uiUpdateJob = null
+    }
+
     private fun startInventory() {
         try {
-            tagDB.clear();
+            tagDB.clear()
+            uiHandler.perform(MainUIHandler.UIAction.ClearTags)
+            startUITimer()
             reader?.Actions?.Inventory?.perform()
         } catch (e: Exception) {
             Log.e(TAG, "Start Inventory Failed", e)
@@ -308,9 +363,14 @@ class MainActivity : AppCompatActivity(), Readers.RFIDReaderEventHandler, RfidEv
 
     private fun stopInventory() {
         try {
-            if (reader?.isConnected == true) {
-                reader?.Actions?.Inventory?.stop()
+            if (reader.isConnected) {
+                reader.Actions?.Inventory?.stop()
+
+                // Final UI refresh logic:
+                val finalSnapshot = synchronized(tagDB) { HashMap(tagDB) }
+                uiHandler.perform(MainUIHandler.UIAction.RefreshTagList(finalSnapshot))
             }
+            stopUITimer()
         } catch (e: Exception) {
             Log.e(TAG, "Stop Inventory Failed", e)
         }
@@ -347,17 +407,20 @@ class MainActivity : AppCompatActivity(), Readers.RFIDReaderEventHandler, RfidEv
         scannedTags?.forEach { tag ->
             tag.tagID?.let { epc ->
                 val iSeenCount = tag.tagSeenCount
-                Log.d(TAG, "Read EPC: $epc, count: $iSeenCount")
-                if (!tagDB.containsKey(epc))
-                {
-                    tagDB .put(epc, iSeenCount)
-                    val rfidData : DWOutputData = DWOutputData(epc, "EPC")
-                    itemAdapter.addItem(rfidData)
-                    binding.rvActivity1.smoothScrollToPosition(0)
-                }
-                else{
-                    var iUpdatedCount = iSeenCount + tagDB .get(epc)!!
-                    tagDB .put(epc, iUpdatedCount)
+
+                // Synchronize access to the shared HashMap
+                synchronized(tagDB) {
+                    val currentCount = tagDB[epc] ?: 0
+                    tagDB[epc] = currentCount + iSeenCount
+
+                    if (!tagDB.containsKey(epc)){
+                        Log.d(TAG, "Unique Tag Found: $epc")
+                        tagDB .put(epc, iSeenCount)
+                    }
+                    else{
+                        var iUpdatedCount = iSeenCount + tagDB .get(epc)!!
+                        tagDB .put(epc, iUpdatedCount)
+                    }
                 }
             }
         }
@@ -368,28 +431,29 @@ class MainActivity : AppCompatActivity(), Readers.RFIDReaderEventHandler, RfidEv
             Log.d(TAG, "ECRT: TO DO Disconnect Event")
         }
         if (rfidStatusEvents?.StatusEventData?.statusEventType == STATUS_EVENT_TYPE.INVENTORY_START_EVENT) {
+            bIsReading = true
             //uiHandler.perform(MainUIHandler.UIAction.StatusUpdate("RFID Status:    Unoqie Tag Count = " + tagDB.size))
             Log.d(TAG, "ECRT: INVENTORY_START_EVENT")
         }
         if (rfidStatusEvents?.StatusEventData?.statusEventType == STATUS_EVENT_TYPE.INVENTORY_STOP_EVENT) {
+            bIsReading = false
             Log.d(TAG, "ECRT: INVENTORY_STOP_EVENT")
             Log.d(TAG, "Unique Tag Count: " + tagDB.size)
-            runOnUiThread {
-                //lblRfidData!!?.setText("Unique Tag count = " + tagDB.size)
-            }
+            //To Do: Update UI for the final count
+
+            // Final UI refresh logic: very good example
+            val finalSnapshot = synchronized(tagDB) { HashMap(tagDB) }
+            uiHandler.perform(MainUIHandler.UIAction.RefreshTagList(finalSnapshot))
+
         }
         if (rfidStatusEvents?.StatusEventData?.statusEventType == STATUS_EVENT_TYPE.OPERATION_END_SUMMARY_EVENT) {
-            Log.d(TAG, "ECRT: Operation End Summary")
-            var iCount = rfidStatusEvents?.StatusEventData?.OperationEndSummaryData?.totalTags
-            if (rfidStatusEvents != null) {
-                Log.d(TAG, "RFID Engine Total = " + iCount)
-                runOnUiThread {
-                    lblRfidData!!?.setText("Total Tag " + iCount)
-                }
-            }
+            val iCount = rfidStatusEvents.StatusEventData.OperationEndSummaryData.totalTags
+            uiHandler.perform(MainUIHandler.UIAction.TotalCount(iCount))
         }
         if (rfidStatusEvents!!.StatusEventData.statusEventType === STATUS_EVENT_TYPE.HANDHELD_TRIGGER_EVENT) {
             if (rfidStatusEvents!!.StatusEventData.HandheldTriggerEventData.handheldEvent === HANDHELD_TRIGGER_EVENT_TYPE.HANDHELD_TRIGGER_PRESSED) {
+                //Fixed the UI Throttling and hardware debounce problems
+                if (bIsReading) return
                 Log.d(TAG, "ECRT: HANDHELD_TRIGGER_PRESSED")
                 startInventory()
             }
